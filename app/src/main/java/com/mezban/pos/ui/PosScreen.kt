@@ -72,6 +72,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mezban.pos.data.MenuItemEntity
+import com.mezban.pos.printer.BluetoothPrinterService
+import com.mezban.pos.viewmodel.AppScreen
 import com.mezban.pos.viewmodel.CartLine
 import com.mezban.pos.viewmodel.PaymentMode
 import com.mezban.pos.viewmodel.PosUiState
@@ -110,14 +112,13 @@ private val MezbanColorScheme = lightColorScheme(
     outline = MezbanColors.BorderGray
 )
 
-/** Top-level entry point — hosts the theme, the ViewModel, and global overlays. */
 @Composable
 fun MezbanPosApp() {
     MaterialTheme(colorScheme = MezbanColorScheme, shapes = MezbanShapes) {
         val viewModel: PosViewModel = viewModel()
         val state by viewModel.uiState.collectAsState()
 
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().background(MezbanColors.Background)) {
             Box(modifier = Modifier.weight(1f)) {
                 when (state.currentScreen) {
                     AppScreen.POS -> PosScreen(state = state, viewModel = viewModel)
@@ -127,14 +128,15 @@ fun MezbanPosApp() {
                 }
             }
 
-            // Bottom Navigation
+            // Bottom Navigation Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MezbanColors.Surface)
                     .border(1.dp, MezbanColors.BorderGray)
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceAround
+                    .padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceAround,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 listOf(
                     AppScreen.POS to "Billing",
@@ -146,8 +148,8 @@ fun MezbanPosApp() {
                     Text(
                         text = label,
                         color = if (selected) MezbanColors.Charcoal else MezbanColors.MutedText,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                        fontSize = 13.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 14.sp,
                         modifier = Modifier.clickable { viewModel.navigateTo(screen) }
                     )
                 }
@@ -168,7 +170,6 @@ fun MezbanPosApp() {
         }
     }
 }
-
 
 @Composable
 fun PosScreen(state: PosUiState, viewModel: PosViewModel) {
@@ -199,8 +200,6 @@ fun PosScreen(state: PosUiState, viewModel: PosViewModel) {
         CheckoutBottomSheet(state = state, viewModel = viewModel)
     }
 }
-
-// ================= MENU (grid / list) =================
 
 @Composable
 private fun MenuSection(state: PosUiState, viewModel: PosViewModel, modifier: Modifier = Modifier) {
@@ -462,8 +461,6 @@ private fun placeholderColorFor(categoryId: Long): Color {
     return palette[(categoryId % palette.size).toInt()]
 }
 
-// ================= CART =================
-
 @Composable
 private fun CartSummaryBar(state: PosUiState, onExpand: () -> Unit) {
     Row(
@@ -599,8 +596,6 @@ private fun SummaryLine(label: String, value: String, bold: Boolean = false) {
         )
     }
 }
-
-// ================= CHECKOUT =================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -744,8 +739,6 @@ private fun quickCashSuggestions(total: Double): List<Double> {
     return listOf(total, rounded, rounded + 50.0, rounded + 100.0).distinct().take(4)
 }
 
-// ================= RECEIPT DIALOG =================
-
 @Composable
 private fun ReceiptDialog(receipt: ReceiptData, onDismiss: () -> Unit, viewModel: PosViewModel) {
     val context = LocalContext.current
@@ -775,6 +768,22 @@ private fun ReceiptDialog(receipt: ReceiptData, onDismiss: () -> Unit, viewModel
                 ) {
                     Text("BT Print", fontSize = 12.sp)
                 }
+                OutlinedButton(
+                    onClick = {
+                        val shareText = buildShareableReceiptText(receipt)
+                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, shareText)
+                        }
+                        context.startActivity(Intent.createChooser(sendIntent, "Share Receipt"))
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Share", fontSize = 12.sp)
+                }
                 Button(
                     onClick = onDismiss,
                     modifier = Modifier.weight(1f),
@@ -794,13 +803,13 @@ private fun buildShareableReceiptText(receipt: ReceiptData): String {
     sb.appendLine("Bill No: ${receipt.billNumber}")
     sb.appendLine("--------------------------------")
     receipt.lines.forEach { line ->
-        sb.appendLine("${line.name}  x${line.qty}  ₹${formatPrice(line.lineTotal)}")
+        sb.appendLine("${line.name}  x${line.qty}  Rs.${formatPrice(line.lineTotal)}")
     }
     sb.appendLine("--------------------------------")
-    sb.appendLine("Subtotal: ₹${formatPrice(receipt.subtotal)}")
-    if (receipt.discountAmount > 0) sb.appendLine("Discount: -₹${formatPrice(receipt.discountAmount)}")
-    sb.appendLine("GST: ₹${formatPrice(receipt.taxAmount)}")
-    sb.appendLine("TOTAL: ₹${formatPrice(receipt.total)}")
+    sb.appendLine("Subtotal: Rs.${formatPrice(receipt.subtotal)}")
+    if (receipt.discountAmount > 0) sb.appendLine("Discount: -Rs.${formatPrice(receipt.discountAmount)}")
+    sb.appendLine("GST: Rs.${formatPrice(receipt.taxAmount)}")
+    sb.appendLine("TOTAL: Rs.${formatPrice(receipt.total)}")
     sb.appendLine("Payment: ${receipt.paymentMode.label}")
     return sb.toString()
 }
