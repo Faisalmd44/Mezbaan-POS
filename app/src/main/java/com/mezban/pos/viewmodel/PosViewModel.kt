@@ -1,307 +1,127 @@
 package com.mezban.pos.viewmodel
 
 import android.app.Application
-import android.bluetooth.BluetoothDevice
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.mezban.pos.data.BillWithItems
-import com.mezban.pos.data.CategoryEntity
+import androidx.room.Room
+import com.mezban.pos.data.AppDatabase
+import com.mezban.pos.data.BillEntity
 import com.mezban.pos.data.MenuItemEntity
-import com.mezban.pos.data.MezbanDatabase
-import com.mezban.pos.data.StaffEntity
-import com.mezban.pos.printer.BluetoothPrinterService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-enum class ViewMode { GRID, LIST }
-enum class AppScreen { POS, SALES, MENU, STAFF }
-
-enum class PaymentMode(val label: String) {
-    CASH("Cash"), UPI("UPI"), OTHER("Other")
-}
-
-data class CartLine(
-    val itemId: Long,
-    val name: String,
-    val unitPrice: Double,
-    val quantity: Int,
-    val isVeg: Boolean
-) {
-    val lineTotal: Double get() = unitPrice * quantity
-}
-
-data class ReceiptLine(val name: String, val qty: Int, val unitPrice: Double, val lineTotal: Double)
-
-data class ReceiptData(
-    val billNumber: String,
-    val timestampMillis: Long,
-    val lines: List<ReceiptLine>,
-    val subtotal: Double,
-    val taxRate: Double,
-    val taxAmount: Double,
-    val discountAmount: Double,
-    val total: Double,
-    val paymentMode: PaymentMode,
-    val cashReceived: Double?,
-    val changeGiven: Double?,
-    val staffName: String = "Admin"
-)
-
-data class PosUiState(
-    val categories: List<CategoryEntity> = emptyList(),
-    val selectedCategoryId: Long? = null,
-    val searchQuery: String = "",
-    val viewMode: ViewMode = ViewMode.GRID,
-    val currentScreen: AppScreen = AppScreen.POS,
-    val allMenuItems: List<MenuItemEntity> = emptyList(),
-    val cart: Map<Long, CartLine> = emptyMap(),
-    val discountPercent: Double = 0.0,
-    val isCheckoutSheetOpen: Boolean = false,
-    val paymentMode: PaymentMode = PaymentMode.CASH,
-    val cashReceivedText: String = "",
-    val isProcessing: Boolean = false,
-    val lastReceipt: ReceiptData? = null,
-    val errorMessage: String? = null,
-    val billsHistory: List<BillWithItems> = emptyList(),
-    val staffList: List<StaffEntity> = emptyList(),
-    val currentStaff: StaffEntity = StaffEntity(name = "Admin", pin = "1234", role = "ADMIN"),
-    val printerStatus: String = "Ready"
-) {
-    val filteredMenuItems: List<MenuItemEntity>
-        get() {
-            val byCategory = if (selectedCategoryId == null) allMenuItems
-            else allMenuItems.filter { it.categoryId == selectedCategoryId }
-            return if (searchQuery.isBlank()) byCategory
-            else byCategory.filter { it.name.contains(searchQuery, ignoreCase = true) }
-        }
-
-    val cartLines: List<CartLine> get() = cart.values.sortedBy { it.name }
-    val cartItemCount: Int get() = cart.values.sumOf { it.quantity }
-    val subtotal: Double get() = cart.values.sumOf { it.lineTotal }
-    val discountAmount: Double get() = subtotal * (discountPercent / 100.0)
-    private val taxableAmount: Double get() = (subtotal - discountAmount).coerceAtLeast(0.0)
-    val taxRate: Double get() = 5.0
-    val taxAmount: Double get() = taxableAmount * (taxRate / 100.0)
-    val total: Double get() = (taxableAmount + taxAmount).coerceAtLeast(0.0)
-    val cashReceived: Double? get() = cashReceivedText.toDoubleOrNull()
-
-    val changeDue: Double?
-        get() {
-            if (paymentMode != PaymentMode.CASH) return null
-            val received = cashReceived ?: return null
-            return (received - total).coerceAtLeast(0.0)
-        }
-
-    val canPlaceOrder: Boolean
-        get() {
-            if (cart.isEmpty()) return false
-            if (paymentMode == PaymentMode.CASH) {
-                val received = cashReceived ?: return false
-                return received >= total
-            }
-            return true
-        }
-
-    val todaySalesTotal: Double get() = billsHistory.sumOf { it.bill.totalAmount }
-    val todayCashTotal: Double get() = billsHistory.filter { it.bill.paymentMode == "CASH" }.sumOf { it.bill.totalAmount }
-    val todayUpiTotal: Double get() = billsHistory.filter { it.bill.paymentMode == "UPI" }.sumOf { it.bill.totalAmount }
-}
+data class CartItem(val item: MenuItemEntity, var quantity: Int)
 
 class PosViewModel(application: Application) : AndroidViewModel(application) {
-    private val db = MezbanDatabase.getInstance(application)
-    private val categoryDao = db.categoryDao()
-    private val menuItemDao = db.menuItemDao()
-    private val billDao = db.billDao()
-    private val billCounterDao = db.billCounterDao()
-    private val staffDao = db.staffDao()
+    val database = Room.databaseBuilder(
+        application,
+        AppDatabase::class.java,
+        "mezbaan_pos.db"
+    ).fallbackToDestructiveMigration().build()
 
-    private val _currentScreen = MutableStateFlow(AppScreen.POS)
-    private val _selectedCategoryId = MutableStateFlow<Long?>(null)
-    private val _searchQuery = MutableStateFlow("")
-    private val _viewMode = MutableStateFlow(ViewMode.GRID)
-    private val _cart = MutableStateFlow<Map<Long, CartLine>>(emptyMap())
-    private val _discountPercent = MutableStateFlow(0.0)
-    private val _isCheckoutSheetOpen = MutableStateFlow(false)
-    private val _paymentMode = MutableStateFlow(PaymentMode.CASH)
-    private val _cashReceivedText = MutableStateFlow("")
-    private val _isProcessing = MutableStateFlow(false)
-    private val _lastReceipt = MutableStateFlow<ReceiptData?>(null)
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    private val _currentStaff = MutableStateFlow(StaffEntity(name = "Admin", pin = "1234", role = "ADMIN"))
-    private val _printerStatus = MutableStateFlow("Ready")
+    val allMenuItems: StateFlow<List<MenuItemEntity>> = database.menuItemDao().getAllItems()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    val uiState: StateFlow<PosUiState> = combine(
-        categoryDao.observeAll(),
-        menuItemDao.observeAll(),
-        billDao.observeAllBillsWithItems(),
-        staffDao.observeActiveStaff(),
-        _currentScreen
-    ) { categories, menuItems, bills, staff, screen ->
-        PosUiState(
-            categories = categories,
-            allMenuItems = menuItems,
-            billsHistory = bills,
-            staffList = staff,
-            currentScreen = screen,
-            currentStaff = _currentStaff.value,
-            selectedCategoryId = _selectedCategoryId.value,
-            searchQuery = _searchQuery.value,
-            viewMode = _viewMode.value,
-            cart = _cart.value,
-            discountPercent = _discountPercent.value,
-            isCheckoutSheetOpen = _isCheckoutSheetOpen.value,
-            paymentMode = _paymentMode.value,
-            cashReceivedText = _cashReceivedText.value,
-            isProcessing = _isProcessing.value,
-            lastReceipt = _lastReceipt.value,
-            errorMessage = _errorMessage.value,
-            printerStatus = _printerStatus.value
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PosUiState())
+    val allBills: StateFlow<List<BillEntity>> = database.billDao().getAllBills()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    fun navigateTo(screen: AppScreen) { _currentScreen.value = screen }
-    fun selectCategory(categoryId: Long?) { _selectedCategoryId.value = categoryId }
-    fun setSearchQuery(query: String) { _searchQuery.value = query }
-    fun toggleViewMode() { _viewMode.value = if (_viewMode.value == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID }
+    private val _cart = MutableStateFlow<List<CartItem>>(emptyList())
+    val cart: StateFlow<List<CartItem>> = _cart
 
-    fun incrementItem(item: MenuItemEntity) {
-        if (!item.isAvailable) return
-        val current = _cart.value
-        val existing = current[item.id]
-        val updated = existing?.copy(quantity = existing.quantity + 1)
-            ?: CartLine(item.id, item.name, item.price, 1, item.isVeg)
-        _cart.value = current + (item.id to updated)
+    init {
+        viewModelScope.launch {
+            seedInitialDataIfEmpty()
+        }
     }
 
-    fun incrementCartLine(line: CartLine) {
-        _cart.value = _cart.value + (line.itemId to line.copy(quantity = line.quantity + 1))
+    fun addToCart(item: MenuItemEntity) {
+        val current = _cart.value.toMutableList()
+        val index = current.indexOfFirst { it.item.id == item.id }
+        if (index >= 0) {
+            val existing = current[index]
+            current[index] = existing.copy(quantity = existing.quantity + 1)
+        } else {
+            current.add(CartItem(item, 1))
+        }
+        _cart.value = current
     }
 
-    fun decrementItem(itemId: Long) {
-        val current = _cart.value
-        val existing = current[itemId] ?: return
-        _cart.value = if (existing.quantity <= 1) current - itemId
-        else current + (itemId to existing.copy(quantity = existing.quantity - 1))
+    fun removeFromCart(item: MenuItemEntity) {
+        val current = _cart.value.toMutableList()
+        val index = current.indexOfFirst { it.item.id == item.id }
+        if (index >= 0) {
+            val existing = current[index]
+            if (existing.quantity > 1) {
+                current[index] = existing.copy(quantity = existing.quantity - 1)
+            } else {
+                current.removeAt(index)
+            }
+            _cart.value = current
+        }
     }
 
     fun clearCart() {
-        _cart.value = emptyMap()
-        _discountPercent.value = 0.0
-        _cashReceivedText.value = ""
-        _paymentMode.value = PaymentMode.CASH
+        _cart.value = emptyList()
     }
 
-    fun setDiscountPercent(percent: Double) { _discountPercent.value = percent.coerceIn(0.0, 100.0) }
-    fun openCheckout() { if (_cart.value.isNotEmpty()) _isCheckoutSheetOpen.value = true }
-    fun closeCheckout() { _isCheckoutSheetOpen.value = false }
-    fun setPaymentMode(mode: PaymentMode) {
-        _paymentMode.value = mode
-        if (mode != PaymentMode.CASH) _cashReceivedText.value = ""
-    }
-    fun setCashReceivedText(text: String) { _cashReceivedText.value = text }
-    fun quickCash(amount: Double) { _cashReceivedText.value = amount.toInt().toString() }
-    fun clearError() { _errorMessage.value = null }
-    fun dismissReceipt() { _lastReceipt.value = null; clearCart(); _isCheckoutSheetOpen.value = false }
-
-    fun toggleItemAvailability(item: MenuItemEntity) {
-        viewModelScope.launch { menuItemDao.setAvailability(item.id, !item.isAvailable) }
-    }
-
-    fun addMenuItem(categoryId: Long, name: String, price: Double, isVeg: Boolean) {
+    fun placeOrder(paymentMode: String, onComplete: (Long) -> Unit) {
         viewModelScope.launch {
-            menuItemDao.insert(MenuItemEntity(categoryId = categoryId, name = name, price = price, isVeg = isVeg))
+            val total = _cart.value.sumOf { it.item.price * it.quantity }
+            val summary = _cart.value.joinToString(", ") { "${it.item.name} x${it.quantity}" }
+            val billId = database.billDao().insert(
+                BillEntity(totalAmount = total, paymentMode = paymentMode, itemsSummary = summary)
+            )
+            clearCart()
+            onComplete(billId)
         }
     }
 
-    fun addStaff(name: String, pin: String, role: String) {
-        viewModelScope.launch { staffDao.insert(StaffEntity(name = name, pin = pin, role = role)) }
-    }
+    private suspend fun seedInitialDataIfEmpty() {
+        val existing = database.menuItemDao().getAllItemsList()
+        if (existing.isEmpty()) {
+            val items = listOf(
+                MenuItemEntity(name = "Veg Patty Burger", price = 59.0, category = "Burgers", isVeg = true, imageUri = "https://images.unsplash.com/photo-1585238342024-78d387f4a707?w=500&q=80"),
+                MenuItemEntity(name = "Paneer Burger", price = 79.0, category = "Burgers", isVeg = true, imageUri = "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=500&q=80"),
+                MenuItemEntity(name = "Chicken Patty Burger", price = 89.0, category = "Burgers", isVeg = false, imageUri = "https://images.unsplash.com/photo-1625813506062-0aeb1d7a094b?w=500&q=80"),
+                MenuItemEntity(name = "Chicken Zinger Burger", price = 99.0, category = "Burgers", isVeg = false, imageUri = "https://images.unsplash.com/photo-1550547660-d9450f859349?w=500&q=80"),
+                MenuItemEntity(name = "American Chicken Burger", price = 130.0, category = "Burgers", isVeg = false, imageUri = "https://images.unsplash.com/photo-1586190848861-99aa4a171e90?w=500&q=80"),
 
-    fun switchStaff(staff: StaffEntity) { _currentStaff.value = staff }
+                MenuItemEntity(name = "Veg Classic Corn & Cheese Pizza", price = 99.0, category = "Pizza", isVeg = true, imageUri = "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=500&q=80"),
+                MenuItemEntity(name = "Farmhouse Delight Pizza", price = 119.0, category = "Pizza", isVeg = true, imageUri = "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=500&q=80"),
+                MenuItemEntity(name = "Mezbaan Royal Paneer Pizza", price = 129.0, category = "Pizza", isVeg = true, imageUri = "https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?w=500&q=80"),
+                MenuItemEntity(name = "Mezbaan Tandoori Pizza", price = 179.0, category = "Pizza", isVeg = false, imageUri = "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=500&q=80"),
+                MenuItemEntity(name = "Mezbaan Loaded Chicken Pizza", price = 219.0, category = "Pizza", isVeg = false, imageUri = "https://images.unsplash.com/photo-1593560708920-61dd98c46a4e?w=500&q=80"),
 
-    fun reprintBill(billWithItems: BillWithItems) {
-        val b = billWithItems.bill
-        val mode = when (b.paymentMode) {
-            "UPI" -> PaymentMode.UPI
-            "OTHER" -> PaymentMode.OTHER
-            else -> PaymentMode.CASH
-        }
-        _lastReceipt.value = ReceiptData(
-            billNumber = b.billNumber,
-            timestampMillis = b.timestamp,
-            lines = billWithItems.items.map { ReceiptLine(it.itemName, it.quantity, it.unitPrice, it.lineTotal) },
-            subtotal = b.subtotal,
-            taxRate = b.taxRate,
-            taxAmount = b.taxAmount,
-            discountAmount = b.discountAmount,
-            total = b.totalAmount,
-            paymentMode = mode,
-            cashReceived = b.cashReceived,
-            changeGiven = b.changeGiven,
-            staffName = b.staffName
-        )
-    }
+                MenuItemEntity(name = "Chicken Wrap", price = 79.0, category = "Wraps", isVeg = false, imageUri = "https://images.unsplash.com/photo-1626700051175-6818013e1d4f?w=500&q=80"),
+                MenuItemEntity(name = "Chicken Cheesy Wrap", price = 89.0, category = "Wraps", isVeg = false, imageUri = "https://images.unsplash.com/photo-1565299585323-38d6b0865b47?w=500&q=80"),
+                MenuItemEntity(name = "American Hot Cheesy Wrap", price = 99.0, category = "Wraps", isVeg = false, imageUri = "https://images.unsplash.com/photo-1529006557810-274b9b2fc783?w=500&q=80"),
 
-    
-    fun printBluetoothReceipt(device: BluetoothDevice, receipt: ReceiptData) {
-        viewModelScope.launch {
-            _printerStatus.value = "Printing..."
-            val res = BluetoothPrinterService.printReceipt(getApplication(), device, receipt)
-            _printerStatus.value = if (res.isSuccess) "Printed Successfully" else "Print Failed"
-        }
-    }
+                MenuItemEntity(name = "Chicken Popcorn", price = 99.0, category = "Sides", isVeg = false, imageUri = "https://images.unsplash.com/photo-1562967914-608f82629710?w=500&q=80"),
+                MenuItemEntity(name = "Wings", price = 119.0, category = "Sides", isVeg = false, imageUri = "https://images.unsplash.com/photo-1527477378474-064e432c74d8?w=500&q=80"),
+                MenuItemEntity(name = "Kurkure Momos", price = 100.0, category = "Sides", isVeg = false, imageUri = "https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?w=500&q=80"),
 
-    fun placeOrder() {
-        val state = uiState.value
-        if (!state.canPlaceOrder) return
-        _isProcessing.value = true
-        viewModelScope.launch {
-            try {
-                val dateKey = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
-                val cartLines = state.cartLines
-                val cartTriples = cartLines.map { Triple(it.itemId, it.name, it.unitPrice to it.quantity) }
+                MenuItemEntity(name = "Veg Sandwich", price = 70.0, category = "Sandwiches", isVeg = true, imageUri = "https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=500&q=80"),
+                MenuItemEntity(name = "Veg Cheese Sandwich", price = 90.0, category = "Sandwiches", isVeg = true, imageUri = "https://images.unsplash.com/photo-1619860860774-1e2e17343432?w=500&q=80"),
+                MenuItemEntity(name = "Chicken Grill Sandwich", price = 90.0, category = "Sandwiches", isVeg = false, imageUri = "https://images.unsplash.com/photo-1553909489-cd47e0907980?w=500&q=80"),
+                MenuItemEntity(name = "Chicken Tandoori Sandwich", price = 100.0, category = "Sandwiches", isVeg = false, imageUri = "https://images.unsplash.com/photo-1509722747041-616f39b57569?w=500&q=80"),
 
-                val billNumber = billDao.createBillTransaction(
-                    counterDao = billCounterDao,
-                    dateKey = dateKey,
-                    subtotal = state.subtotal,
-                    taxRate = state.taxRate,
-                    taxAmount = state.taxAmount,
-                    discountAmount = state.discountAmount,
-                    totalAmount = state.total,
-                    paymentMode = state.paymentMode.name,
-                    cashReceived = state.cashReceived,
-                    changeGiven = state.changeDue,
-                    staffName = state.currentStaff.name,
-                    cartLines = cartTriples
-                )
+                MenuItemEntity(name = "Salted Fries", price = 50.0, category = "Fries", isVeg = true, imageUri = "https://images.unsplash.com/photo-1576107232684-1279f3908594?w=500&q=80"),
+                MenuItemEntity(name = "Peri Peri Fries", price = 60.0, category = "Fries", isVeg = true, imageUri = "https://images.unsplash.com/photo-1585109649139-366815a0d713?w=500&q=80"),
+                MenuItemEntity(name = "Loaded Fries", price = 70.0, category = "Fries", isVeg = true, imageUri = "https://images.unsplash.com/photo-1585238341267-1cf923a1a5b8?w=500&q=80"),
+                MenuItemEntity(name = "Chicken Loaded Fries", price = 120.0, category = "Fries", isVeg = false, imageUri = "https://images.unsplash.com/photo-1541592106381-b31e9677c0e5?w=500&q=80"),
 
-                _lastReceipt.value = ReceiptData(
-                    billNumber = billNumber,
-                    timestampMillis = System.currentTimeMillis(),
-                    lines = cartLines.map { ReceiptLine(it.name, it.quantity, it.unitPrice, it.lineTotal) },
-                    subtotal = state.subtotal,
-                    taxRate = state.taxRate,
-                    taxAmount = state.taxAmount,
-                    discountAmount = state.discountAmount,
-                    total = state.total,
-                    paymentMode = state.paymentMode,
-                    cashReceived = state.cashReceived,
-                    changeGiven = state.changeDue,
-                    staffName = state.currentStaff.name
-                )
-            } catch (e: Exception) {
-                _errorMessage.value = e.message
-            } finally {
-                _isProcessing.value = false
-            }
+                MenuItemEntity(name = "Thums Up Can", price = 30.0, category = "Drinks", isVeg = true, imageUri = "https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=500&q=80"),
+                MenuItemEntity(name = "Coke Can", price = 30.0, category = "Drinks", isVeg = true, imageUri = "https://images.unsplash.com/photo-1554866585-cd94860890b7?w=500&q=80"),
+                MenuItemEntity(name = "Fanta Can", price = 30.0, category = "Drinks", isVeg = true, imageUri = "https://images.unsplash.com/photo-1624517452488-04869289c4ca?w=500&q=80"),
+                MenuItemEntity(name = "Campa 10", price = 10.0, category = "Drinks", isVeg = true, imageUri = "https://images.unsplash.com/photo-1581098365948-6a5a912b7a49?w=500&q=80"),
+                MenuItemEntity(name = "Campa 20", price = 20.0, category = "Drinks", isVeg = true, imageUri = "https://images.unsplash.com/photo-1581098365948-6a5a912b7a49?w=500&q=80"),
+                MenuItemEntity(name = "Campa Energy", price = 30.0, category = "Drinks", isVeg = true, imageUri = "https://images.unsplash.com/photo-1527960471264-932f39eb5846?w=500&q=80"),
+                MenuItemEntity(name = "Red Bull", price = 135.0, category = "Drinks", isVeg = true, imageUri = "https://images.unsplash.com/photo-1543253687-c931c8e01820?w=500&q=80")
+            )
+            items.forEach { database.menuItemDao().insert(it) }
         }
     }
 }
