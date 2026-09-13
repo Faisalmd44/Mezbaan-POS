@@ -1,17 +1,3 @@
-/**
- * MEZBAN POS — Room persistence layer.
- *
- * Required module-level Gradle dependencies (build.gradle.kts):
- *
- * plugins {
- *     id("com.google.devtools.ksp")
- * }
- * dependencies {
- *     implementation("androidx.room:room-runtime:2.6.1")
- *     implementation("androidx.room:room-ktx:2.6.1")
- *     ksp("androidx.room:room-compiler:2.6.1")
- * }
- */
 package com.mezban.pos.data
 
 import android.content.Context
@@ -29,13 +15,12 @@ import androidx.room.Relation
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.Update
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-
-// ================= ENTITIES =================
 
 @Entity(tableName = "categories")
 data class CategoryEntity(
@@ -64,9 +49,18 @@ data class MenuItemEntity(
     val sortOrder: Int = 0
 )
 
+@Entity(tableName = "staff")
+data class StaffEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val pin: String,
+    val role: String = "CASHIER",
+    val isActive: Boolean = true
+)
+
 @Entity(tableName = "bill_counter")
 data class BillCounterEntity(
-    @PrimaryKey val dateKey: String, // yyyyMMdd
+    @PrimaryKey val dateKey: String,
     val lastSequence: Int
 )
 
@@ -80,10 +74,11 @@ data class BillEntity(
     val taxAmount: Double,
     val discountAmount: Double,
     val totalAmount: Double,
-    val paymentMode: String, // CASH, UPI, OTHER
+    val paymentMode: String,
     val cashReceived: Double? = null,
     val changeGiven: Double? = null,
-    val itemCount: Int
+    val itemCount: Int,
+    val staffName: String = "Admin"
 )
 
 @Entity(
@@ -112,8 +107,6 @@ data class BillWithItems(
     val items: List<BillItemEntity>
 )
 
-// ================= DAOs =================
-
 @Dao
 interface CategoryDao {
     @Query("SELECT * FROM categories ORDER BY sortOrder ASC")
@@ -131,13 +124,31 @@ interface CategoryDao {
 
 @Dao
 interface MenuItemDao {
-    @Query("SELECT * FROM menu_items WHERE isAvailable = 1 ORDER BY sortOrder ASC")
+    @Query("SELECT * FROM menu_items ORDER BY sortOrder ASC")
     fun observeAll(): Flow<List<MenuItemEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: MenuItemEntity)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(items: List<MenuItemEntity>)
 
+    @Query("UPDATE menu_items SET isAvailable = :isAvailable WHERE id = :id")
+    suspend fun setAvailability(id: Long, isAvailable: Boolean)
+
     @Query("SELECT COUNT(*) FROM menu_items")
+    suspend fun count(): Int
+}
+
+@Dao
+interface StaffDao {
+    @Query("SELECT * FROM staff WHERE isActive = 1")
+    fun observeActiveStaff(): Flow<List<StaffEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(staff: StaffEntity)
+
+    @Query("SELECT COUNT(*) FROM staff")
     suspend fun count(): Int
 }
 
@@ -152,7 +163,6 @@ interface BillCounterDao {
 
 @Dao
 interface BillDao {
-
     @Insert
     suspend fun insertBill(bill: BillEntity): Long
 
@@ -160,19 +170,9 @@ interface BillDao {
     suspend fun insertBillItems(items: List<BillItemEntity>)
 
     @Transaction
-    @Query("SELECT * FROM bills WHERE id = :billId")
-    suspend fun getBillWithItems(billId: Long): BillWithItems?
-
-    @Transaction
     @Query("SELECT * FROM bills ORDER BY timestamp DESC")
     fun observeAllBillsWithItems(): Flow<List<BillWithItems>>
 
-    /**
-     * ACID transaction: allocates the next offline bill number for the given date
-     * (MZB-YYYYMMDD-XXXX), persists the bill header + every line item, and advances
-     * the daily counter. Room wraps this whole function body in a single database
-     * transaction — either everything commits, or nothing does.
-     */
     @Transaction
     suspend fun createBillTransaction(
         counterDao: BillCounterDao,
@@ -185,7 +185,8 @@ interface BillDao {
         paymentMode: String,
         cashReceived: Double?,
         changeGiven: Double?,
-        cartLines: List<Triple<Long, String, Pair<Double, Int>>> // itemId, name, (unitPrice, qty)
+        staffName: String,
+        cartLines: List<Triple<Long, String, Pair<Double, Int>>>
     ): String {
         val existing = counterDao.get(dateKey)
         val nextSeq = (existing?.lastSequence ?: 0) + 1
@@ -202,7 +203,8 @@ interface BillDao {
             paymentMode = paymentMode,
             cashReceived = cashReceived,
             changeGiven = changeGiven,
-            itemCount = cartLines.sumOf { it.third.second }
+            itemCount = cartLines.sumOf { it.third.second },
+            staffName = staffName
         )
         val billId = insertBill(bill)
 
@@ -223,17 +225,16 @@ interface BillDao {
     }
 }
 
-// ================= DATABASE =================
-
 @Database(
     entities = [
         CategoryEntity::class,
         MenuItemEntity::class,
         BillCounterEntity::class,
         BillEntity::class,
-        BillItemEntity::class
+        BillItemEntity::class,
+        StaffEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class MezbanDatabase : RoomDatabase() {
@@ -241,6 +242,7 @@ abstract class MezbanDatabase : RoomDatabase() {
     abstract fun menuItemDao(): MenuItemDao
     abstract fun billCounterDao(): BillCounterDao
     abstract fun billDao(): BillDao
+    abstract fun staffDao(): StaffDao
 
     companion object {
         @Volatile
@@ -256,11 +258,10 @@ abstract class MezbanDatabase : RoomDatabase() {
                     .addCallback(object : RoomDatabase.Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)
-                            // By the time the DB is actually opened (first query),
-                            // INSTANCE below is guaranteed to already be assigned.
                             INSTANCE?.let { database ->
                                 CoroutineScope(Dispatchers.IO).launch {
                                     seedMenu(database)
+                                    seedStaff(database)
                                 }
                             }
                         }
@@ -272,7 +273,12 @@ abstract class MezbanDatabase : RoomDatabase() {
             }
         }
 
-        /** Pre-seeds the real MEZBAN menu. No-ops if data already exists. */
+        suspend fun seedStaff(db: MezbanDatabase) {
+            if (db.staffDao().count() > 0) return
+            db.staffDao().insert(StaffEntity(name = "Admin", pin = "1234", role = "ADMIN"))
+            db.staffDao().insert(StaffEntity(name = "Counter Cashier", pin = "0000", role = "CASHIER"))
+        }
+
         suspend fun seedMenu(db: MezbanDatabase) {
             if (db.categoryDao().count() > 0) return
 
@@ -300,61 +306,47 @@ abstract class MezbanDatabase : RoomDatabase() {
                 }
             }
 
-            addItems(
-                "Burgers", listOf(
-                    Triple("Veg Patty Burger", 59.0, true),
-                    Triple("Paneer Burger", 79.0, true),
-                    Triple("Chicken Patty Burger", 89.0, false),
-                    Triple("Chicken Zinger Burger", 99.0, false),
-                    Triple("American Chicken Burger", 130.0, false)
-                )
-            )
-            addItems(
-                "Pizza", listOf(
-                    Triple("Veg Classic Corn & Cheese Pizza", 99.0, true),
-                    Triple("Farmhouse Delight Pizza", 119.0, true),
-                    Triple("Mezbaan Royal Paneer Pizza", 129.0, true),
-                    Triple("Mezbaan Tandoori Pizza", 179.0, false),
-                    Triple("Mezbaan Loaded Chicken Pizza", 219.0, false)
-                )
-            )
-            addItems(
-                "Wraps", listOf(
-                    Triple("Chicken Wrap", 79.0, false),
-                    Triple("Chicken Cheesy Wrap", 89.0, false),
-                    Triple("American Hot Cheesy Wrap", 99.0, false)
-                )
-            )
-            addItems(
-                "Sides & Momos", listOf(
-                    Triple("Chicken Popcorn", 99.0, false),
-                    Triple("Wings", 119.0, false),
-                    Triple("Kurkure Momos", 100.0, false)
-                )
-            )
-            addItems(
-                "Sandwiches", listOf(
-                    Triple("Veg Sandwich", 70.0, true),
-                    Triple("Veg Cheese Sandwich", 90.0, true),
-                    Triple("Chicken Grill Sandwich", 90.0, false),
-                    Triple("Chicken Tandoori Sandwich", 100.0, false)
-                )
-            )
-            addItems(
-                "Fries", listOf(
-                    Triple("Salted Fries", 50.0, true),
-                    Triple("Peri Peri Fries", 60.0, true),
-                    Triple("Loaded Fries", 70.0, true),
-                    Triple("Chicken Loaded Fries", 120.0, false)
-                )
-            )
-            addItems(
-                "Drinks & Combos", listOf(
-                    Triple("Mojito (Regular)", 99.0, true),
-                    Triple("Mojito (Special)", 119.0, true),
-                    Triple("Combo Masti Loaded", 349.0, false)
-                )
-            )
+            addItems("Burgers", listOf(
+                Triple("Veg Patty Burger", 59.0, true),
+                Triple("Paneer Burger", 79.0, true),
+                Triple("Chicken Patty Burger", 89.0, false),
+                Triple("Chicken Zinger Burger", 99.0, false),
+                Triple("American Chicken Burger", 130.0, false)
+            ))
+            addItems("Pizza", listOf(
+                Triple("Veg Classic Corn & Cheese Pizza", 99.0, true),
+                Triple("Farmhouse Delight Pizza", 119.0, true),
+                Triple("Mezbaan Royal Paneer Pizza", 129.0, true),
+                Triple("Mezbaan Tandoori Pizza", 179.0, false),
+                Triple("Mezbaan Loaded Chicken Pizza", 219.0, false)
+            ))
+            addItems("Wraps", listOf(
+                Triple("Chicken Wrap", 79.0, false),
+                Triple("Chicken Cheesy Wrap", 89.0, false),
+                Triple("American Hot Cheesy Wrap", 99.0, false)
+            ))
+            addItems("Sides & Momos", listOf(
+                Triple("Chicken Popcorn", 99.0, false),
+                Triple("Wings", 119.0, false),
+                Triple("Kurkure Momos", 100.0, false)
+            ))
+            addItems("Sandwiches", listOf(
+                Triple("Veg Sandwich", 70.0, true),
+                Triple("Veg Cheese Sandwich", 90.0, true),
+                Triple("Chicken Grill Sandwich", 90.0, false),
+                Triple("Chicken Tandoori Sandwich", 100.0, false)
+            ))
+            addItems("Fries", listOf(
+                Triple("Salted Fries", 50.0, true),
+                Triple("Peri Peri Fries", 60.0, true),
+                Triple("Loaded Fries", 70.0, true),
+                Triple("Chicken Loaded Fries", 120.0, false)
+            ))
+            addItems("Drinks & Combos", listOf(
+                Triple("Mojito (Regular)", 99.0, true),
+                Triple("Mojito (Special)", 119.0, true),
+                Triple("Combo Masti Loaded", 349.0, false)
+            ))
 
             db.menuItemDao().insertAll(items)
         }
