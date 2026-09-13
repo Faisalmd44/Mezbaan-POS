@@ -117,24 +117,58 @@ fun MezbanPosApp() {
         val viewModel: PosViewModel = viewModel()
         val state by viewModel.uiState.collectAsState()
 
-        Surface(color = MezbanColors.Background, modifier = Modifier.fillMaxSize()) {
-            PosScreen(state = state, viewModel = viewModel)
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.weight(1f)) {
+                when (state.currentScreen) {
+                    AppScreen.POS -> PosScreen(state = state, viewModel = viewModel)
+                    AppScreen.SALES -> SalesScreen(state = state, viewModel = viewModel)
+                    AppScreen.MENU -> MenuManageScreen(state = state, viewModel = viewModel)
+                    AppScreen.STAFF -> StaffScreen(state = state, viewModel = viewModel)
+                }
+            }
+
+            // Bottom Navigation
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MezbanColors.Surface)
+                    .border(1.dp, MezbanColors.BorderGray)
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                listOf(
+                    AppScreen.POS to "Billing",
+                    AppScreen.SALES to "Sales",
+                    AppScreen.MENU to "Menu",
+                    AppScreen.STAFF to "Staff"
+                ).forEach { (screen, label) ->
+                    val selected = state.currentScreen == screen
+                    Text(
+                        text = label,
+                        color = if (selected) MezbanColors.Charcoal else MezbanColors.MutedText,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = 13.sp,
+                        modifier = Modifier.clickable { viewModel.navigateTo(screen) }
+                    )
+                }
+            }
         }
 
         state.errorMessage?.let { message ->
             AlertDialog(
                 onDismissRequest = { viewModel.clearError() },
                 confirmButton = { TextButton(onClick = { viewModel.clearError() }) { Text("OK") } },
-                title = { Text("Something went wrong") },
+                title = { Text("Notice") },
                 text = { Text(message) }
             )
         }
 
         state.lastReceipt?.let { receipt ->
-            ReceiptDialog(receipt = receipt, onDismiss = { viewModel.dismissReceipt() })
+            ReceiptDialog(receipt = receipt, onDismiss = { viewModel.dismissReceipt() }, viewModel = viewModel)
         }
     }
 }
+
 
 @Composable
 fun PosScreen(state: PosUiState, viewModel: PosViewModel) {
