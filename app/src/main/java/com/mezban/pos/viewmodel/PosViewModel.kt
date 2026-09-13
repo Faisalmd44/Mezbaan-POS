@@ -4,9 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
-import com.mezban.pos.data.AppDatabase
-import com.mezban.pos.data.BillEntity
-import com.mezban.pos.data.MenuItemEntity
+import com.mezban.pos.data.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -49,34 +47,22 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
         _cart.value = current
     }
 
-    fun removeFromCart(item: MenuItemEntity) {
-        val current = _cart.value.toMutableList()
-        val index = current.indexOfFirst { it.item.id == item.id }
-        if (index >= 0) {
-            val existing = current[index]
-            if (existing.quantity > 1) {
-                current[index] = existing.copy(quantity = existing.quantity - 1)
-            } else {
-                current.removeAt(index)
-            }
-            _cart.value = current
-        }
-    }
-
-    fun clearCart() {
-        _cart.value = emptyList()
-    }
-
-    fun placeOrder(paymentMode: String, onComplete: (Long) -> Unit) {
+    fun toggleItemAvailability(item: MenuItemEntity) {
         viewModelScope.launch {
-            val total = _cart.value.sumOf { it.item.price * it.quantity }
-            val summary = _cart.value.joinToString(", ") { "${it.item.name} x${it.quantity}" }
-            val billId = database.billDao().insert(
-                BillEntity(totalAmount = total, paymentMode = paymentMode, itemsSummary = summary)
-            )
-            clearCart()
-            onComplete(billId)
+            database.menuItemDao().update(item.copy(isAvailable = !item.isAvailable))
         }
+    }
+
+    fun addMenuItem(name: String, price: Double, category: String, isVeg: Boolean) {
+        viewModelScope.launch {
+            database.menuItemDao().insert(
+                MenuItemEntity(name = name, price = price, category = category, isVeg = isVeg)
+            )
+        }
+    }
+
+    fun reprintBill(bill: BillEntity) {
+        // Trigger printer
     }
 
     private suspend fun seedInitialDataIfEmpty() {
