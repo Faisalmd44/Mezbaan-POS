@@ -18,16 +18,19 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import com.mezban.pos.R
 import com.mezban.pos.data.MenuItemEntity
 import com.mezban.pos.viewmodel.PosViewModel
+import java.util.Locale
 
 @Composable
 fun PosScreen(viewModel: PosViewModel) {
@@ -48,7 +51,7 @@ fun PosScreen(viewModel: PosViewModel) {
             .fillMaxSize()
             .background(Color(0xFFF8F9FA))
     ) {
-        // TOP HEADER BAR (Matching AI Studio)
+        // TOP HEADER BAR
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -111,6 +114,7 @@ fun PosScreen(viewModel: PosViewModel) {
             placeholder = { Text("Search menu items...", fontSize = 13.sp, color = Color(0xFF9E9E9E)) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFF9E9E9E)) },
             shape = RoundedCornerShape(12.dp),
+            singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = Color.White,
                 unfocusedContainerColor = Color.White,
@@ -146,16 +150,29 @@ fun PosScreen(viewModel: PosViewModel) {
             }
         }
 
-        // FOOD CARDS GRID
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            contentPadding = PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(filteredItems) { item ->
-                FoodCard(item = item, onAdd = { viewModel.addToCart(item) })
+        // FOOD ITEMS GRID (weight(1f) ensures NO infinite-height crash)
+        if (filteredItems.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color(0xFFFF5722))
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                items(filteredItems, key = { it.id }) { item ->
+                    FoodCard(item = item, onAdd = { viewModel.addToCart(item) })
+                }
             }
         }
     }
@@ -174,15 +191,24 @@ fun FoodCard(item: MenuItemEntity, onAdd: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(115.dp)
+                    .background(Color(0xFFEEEEEE))
             ) {
-                AsyncImage(
+                SubcomposeAsyncImage(
                     model = item.imageUri ?: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=500&q=80",
                     contentDescription = item.name,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    loading = {
+                        Box(modifier = Modifier.fillMaxSize().background(Color(0xFFF0F0F0)))
+                    },
+                    error = {
+                        Box(modifier = Modifier.fillMaxSize().background(Color(0xFF212121)), contentAlignment = Alignment.Center) {
+                            Text("Mezbaan", color = Color(0xFFE5A93C), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 )
 
-                // Veg / Non-Veg Indicator Dot
+                // Veg / Non-Veg Indicator
                 Surface(
                     shape = RoundedCornerShape(4.dp),
                     color = Color.White,
@@ -224,11 +250,12 @@ fun FoodCard(item: MenuItemEntity, onAdd: () -> Unit) {
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     color = Color(0xFF212121)
                 )
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
-                    text = "₹${String.format("%.2f", item.price)}",
+                    text = "₹${String.format(Locale.ENGLISH, "%.2f", item.price)}",
                     fontWeight = FontWeight.Black,
                     fontSize = 14.sp,
                     color = Color(0xFFFF5722)
