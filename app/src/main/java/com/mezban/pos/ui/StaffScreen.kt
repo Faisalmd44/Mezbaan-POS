@@ -151,7 +151,7 @@ fun AddStaffDialog(onDismiss: () -> Unit, onSave: (String, String, String) -> Un
                     value = pin,
                     onValueChange = { if (it.length <= 4) pin = it },
                     placeholder = { Text("4-digit PIN", color = Color(0xFF9E9E9E), fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF757575)) },
+                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF757575)) },
                     visualTransformation = PasswordVisualTransformation(),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
