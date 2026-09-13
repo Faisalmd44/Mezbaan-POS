@@ -249,10 +249,11 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    
     fun printBluetoothReceipt(device: BluetoothDevice, receipt: ReceiptData) {
         viewModelScope.launch {
             _printerStatus.value = "Printing..."
-            val res = BluetoothPrinterService.printReceipt(device, receipt)
+            val res = BluetoothPrinterService.printReceipt(getApplication(), device, receipt)
             _printerStatus.value = if (res.isSuccess) "Printed Successfully" else "Print Failed"
         }
     }
