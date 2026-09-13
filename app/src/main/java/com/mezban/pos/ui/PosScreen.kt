@@ -590,7 +590,7 @@ fun PrinterManagerDialog(viewModel: PosViewModel, onDismiss: () -> Unit) {
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Done", color = Color.White)
+                    Text(text = "Done", color = Color.White)
                 }
             }
         }
