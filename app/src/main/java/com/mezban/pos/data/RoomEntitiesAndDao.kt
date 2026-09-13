@@ -11,6 +11,7 @@ data class MenuItemEntity(
     val category: String,
     val isVeg: Boolean,
     val isAvailable: Boolean = true,
+    val stockUnits: Int = 20,
     val imageUri: String? = null
 )
 
@@ -19,8 +20,21 @@ data class BillEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val timestamp: Long = System.currentTimeMillis(),
     val totalAmount: Double,
-    val paymentMode: String = "Cash",
-    val itemsSummary: String = ""
+    val subtotal: Double = totalAmount,
+    val gstAmount: Double = 0.0,
+    val cashTendered: Double = totalAmount,
+    val changeReturned: Double = 0.0,
+    val paymentMode: String = "CASH",
+    val itemsSummary: String = "",
+    val cashierName: String = "Admin"
+)
+
+@Entity(tableName = "staff_members")
+data class StaffEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val pin: String,
+    val role: String = "Cashier"
 )
 
 @Dao
@@ -37,8 +51,8 @@ interface MenuItemDao {
     @Update
     suspend fun update(item: MenuItemEntity)
 
-    @Delete
-    suspend fun delete(item: MenuItemEntity)
+    @Query("DELETE FROM menu_items")
+    suspend fun clearAll()
 }
 
 @Dao
@@ -50,8 +64,21 @@ interface BillDao {
     suspend fun insert(bill: BillEntity): Long
 }
 
-@Database(entities = [MenuItemEntity::class, BillEntity::class], version = 5, exportSchema = false)
+@Dao
+interface StaffDao {
+    @Query("SELECT * FROM staff_members")
+    fun getAllStaff(): Flow<List<StaffEntity>>
+
+    @Query("SELECT * FROM staff_members")
+    suspend fun getAllStaffList(): List<StaffEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(staff: StaffEntity): Long
+}
+
+@Database(entities = [MenuItemEntity::class, BillEntity::class, StaffEntity::class], version = 8, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun menuItemDao(): MenuItemDao
     abstract fun billDao(): BillDao
+    abstract fun staffDao(): StaffDao
 }
