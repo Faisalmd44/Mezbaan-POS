@@ -747,7 +747,7 @@ private fun quickCashSuggestions(total: Double): List<Double> {
 // ================= RECEIPT DIALOG =================
 
 @Composable
-private fun ReceiptDialog(receipt: ReceiptData, onDismiss: () -> Unit) {
+private fun ReceiptDialog(receipt: ReceiptData, onDismiss: () -> Unit, viewModel: PosViewModel) {
     val context = LocalContext.current
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -759,31 +759,29 @@ private fun ReceiptDialog(receipt: ReceiptData, onDismiss: () -> Unit) {
             ) {
                 ReceiptPreview(receipt = receipt, paperWidth = PaperWidth.MM80)
             }
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
                     onClick = {
-                        val shareText = buildShareableReceiptText(receipt)
-                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, shareText)
+                        val devices = BluetoothPrinterService.getPairedDevices()
+                        val printer = devices.firstOrNull()
+                        if (printer != null) {
+                            viewModel.printBluetoothReceipt(printer, receipt)
                         }
-                        context.startActivity(Intent.createChooser(sendIntent, "Share Receipt"))
                     },
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MezbanColors.Accent)
                 ) {
-                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Share")
+                    Text("BT Print", fontSize = 12.sp)
                 }
                 Button(
                     onClick = onDismiss,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MezbanColors.Charcoal)
                 ) {
-                    Text("New Order")
+                    Text("Done", fontSize = 12.sp)
                 }
             }
         }
