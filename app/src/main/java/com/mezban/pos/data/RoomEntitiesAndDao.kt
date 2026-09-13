@@ -54,7 +54,7 @@ data class StaffEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val pin: String,
-    val role: String = "CASHIER",
+    val role: String = "CASHIER", // ADMIN or CASHIER
     val isActive: Boolean = true
 )
 
